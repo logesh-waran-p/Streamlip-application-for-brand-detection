@@ -181,7 +181,7 @@ if run:
     st.download_button(
         label="⬇️ Download Excel results",
         data=output,
-        file_name="brand_match_results_topN.xlsx",
+        file_name="brand_match_results_top5_with_key.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
