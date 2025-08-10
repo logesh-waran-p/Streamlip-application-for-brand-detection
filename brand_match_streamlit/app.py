@@ -185,70 +185,72 @@ if run:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-st.caption("Tip: If you see missing matches, lower the threshold or increase Top N.")
-    # -------------------- Stage 2 Filtering --------------------
-    st.subheader("Stage 2: Filter to brands already present in the description")
+# -------------------- Stage 2 Filtering --------------------
+st.subheader("Stage 2: Filter to brands already present in the description")
 
-    import re as _re
+import re as _re
 
-    def _clean_text(text):
-        text = str(text).lower()
-        text = _re.sub(r'\([^)]*\)', '', text)             # remove (...) content
-        text = _re.sub(r"[’'‘`]", '', text)                # remove apostrophes
-        text = _re.sub(r'\b(inc|incorporated|ltd|llc|corp|co|company)\b', '', text)
-        text = _re.sub(r'[^\w\s]', ' ', text)              # punctuation -> space
-        text = _re.sub(r'\s+', ' ', text)                  # normalize spaces
-        return text.strip()
+def _clean_text(text):
+    text = str(text).lower()
+    text = _re.sub(r'\([^)]*\)', '', text)             # remove (...) content
+    text = _re.sub(r"[’'‘`]", '', text)                # remove apostrophes
+    text = _re.sub(r'\b(inc|incorporated|ltd|llc|corp|co|company)\b', '', text)
+    text = _re.sub(r'[^\w\s]', ' ', text)              # punctuation -> space
+    text = _re.sub(r'\s+', ' ', text)                  # normalize spaces
+    return text.strip()
 
-    def _clean_brand_name(brand):
-        brand = _re.sub(r'\([^)]*\)', '', str(brand))
-        return _clean_text(brand).strip()
+def _clean_brand_name(brand):
+    brand = _re.sub(r'\([^)]*\)', '', str(brand))
+    return _clean_text(brand).strip()
 
-    def _brand_in_description(brand, description):
-        description_tokens = set(_clean_text(description).split())
-        brand_tokens = set(str(brand).split())
-        return brand_tokens.issubset(description_tokens)
+def _brand_in_description(brand, description):
+    description_tokens = set(_clean_text(description).split())
+    brand_tokens = set(str(brand).split())
+    return brand_tokens.issubset(description_tokens)
 
-    def _split_brands(s):
-        # Split on commas NOT within parentheses
-        pattern = r',\s*(?![^()]*\))'
-        return _re.split(pattern, str(s))
+def _split_brands(s):
+    # Split on commas NOT within parentheses
+    pattern = r',\s*(?![^()]*\))'
+    return _re.split(pattern, str(s))
 
-    def _filter_matched_brands(description, matched_brands_str):
-        if pd.isna(matched_brands_str) or str(matched_brands_str).strip() == '':
-            return ''
-        matched_brands_raw = _split_brands(matched_brands_str)
-        filtered_brands = []
-        for raw_brand in matched_brands_raw:
-            brand = _clean_brand_name(raw_brand)
-            if _brand_in_description(brand, description):
-                filtered_brands.append(str(raw_brand).strip())
-        return ', '.join(filtered_brands)
+def _filter_matched_brands(description, matched_brands_str):
+    if pd.isna(matched_brands_str) or str(matched_brands_str).strip() == '':
+        return ''
+    matched_brands_raw = _split_brands(matched_brands_str)
+    filtered_brands = []
+    for raw_brand in matched_brands_raw:
+        brand = _clean_brand_name(raw_brand)
+        if _brand_in_description(brand, description):
+            filtered_brands.append(str(raw_brand).strip())
+    return ', '.join(filtered_brands)
 
-    # Build Stage 2 DataFrame
-    stage2_df = out_df.copy()
-    # Ensure required columns exist
-    if "Description" in stage2_df.columns and "Matched_Brands" in stage2_df.columns:
-        stage2_df["Filtered_Brands"] = stage2_df.apply(
-            lambda row: _filter_matched_brands(row["Description"], row["Matched_Brands"]),
-            axis=1
-        )
-    else:
-        st.warning("Stage 2 could not run because required columns are missing.")
-        stage2_df = out_df
-
-    st.dataframe(stage2_df.head(200), use_container_width=True)
-
-    # Download Stage 2 results
-    output2 = io.BytesIO()
-    with pd.ExcelWriter(output2, engine="openpyxl") as writer:
-        # Keep sheet name simple for compatibility
-        stage2_df.to_excel(writer, index=False, sheet_name="Sheet1")
-    output2.seek(0)
-
-    st.download_button(
-        label="⬇️ Download Excel results (Stage 2 filtered)",
-        data=output2,
-        file_name="brand_match_results_filtered_with_key.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+# Build Stage 2 DataFrame
+stage2_df = out_df.copy()
+if "Description" in stage2_df.columns and "Matched_Brands" in stage2_df.columns:
+    stage2_df["Filtered_Brands"] = stage2_df.apply(
+        lambda row: _filter_matched_brands(row["Description"], row["Matched_Brands"]),
+        axis=1
     )
+else:
+    st.warning("Stage 2 could not run because required columns are missing.")
+    stage2_df = out_df
+
+st.subheader("Stage 2 Results (first 200 rows)")
+st.dataframe(stage2_df.head(200), use_container_width=True)
+
+# Download Stage 2 results
+output2 = io.BytesIO()
+with pd.ExcelWriter(output2, engine="openpyxl") as writer:
+    stage2_df.to_excel(writer, index=False, sheet_name="Sheet1")
+output2.seek(0)
+
+st.download_button(
+    label="⬇️ Download Excel results (Stage 2 filtered)",
+    data=output2,
+    file_name="brand_match_results_filtered_with_key.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
+
+st.caption("Tip: If you see missing matches, lower the threshold or increase Top N.")
+    
