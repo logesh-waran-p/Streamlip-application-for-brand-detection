@@ -1,129 +1,122 @@
-\
 import io
 import re
 import pandas as pd
 import streamlit as st
 from rapidfuzz import process, fuzz
 
-st.set_page_config(page_title="Brand Matcher", layout="wide")
-st.title("🧠🔎 Brand Matcher — Descriptions ↔ Brands")
+st.set_page_config(page_title="Brand Matcher (Updated)", layout="wide")
+st.title("🧠🔎 Brand Matcher — Updated Version")
 
 st.markdown("""
 Upload **two Excel files**:
-1) one with product **descriptions** (plus an optional ID column) and  
-2) one with **brands**.
+1) Product descriptions file (with `Description` + optional `data_key`)  
+2) Brands file (with `Brand` column)
 
-Adjust options, run the matcher, and **download the results as Excel**.
+Run the matcher → filter → **download results as Excel**.
 """)
 
-# --- Controls
+# Sidebar controls
 with st.sidebar:
     st.header("Settings")
-    similarity_threshold = st.slider("Similarity threshold", min_value=0, max_value=100, value=75, step=1)
-    top_n = st.number_input("Top N candidates", min_value=1, max_value=20, value=5, step=1)
+    similarity_threshold = st.slider("Similarity threshold", 0, 100, 75, 1)
+    top_n = st.number_input("Top N candidates", 1, 20, 5, 1)
     st.caption("Higher threshold = stricter matches.")
 
-# --- Uploaders
+# File uploaders
 c1, c2 = st.columns(2)
 with c1:
-    desc_file = st.file_uploader("Upload product descriptions Excel", type=["xlsx", "xls"], key="desc")
+    desc_file = st.file_uploader("Upload product descriptions Excel", type=["xlsx", "xls"])
 with c2:
-    brand_file = st.file_uploader("Upload brands Excel", type=["xlsx", "xls"], key="brand")
+    brand_file = st.file_uploader("Upload brands Excel", type=["xlsx", "xls"])
 
 def clean_text(text: str) -> str:
     text = str(text)
     text = text.lower()
-    text = re.sub(r'\([^)]*\)', '', text)          # remove (...) segments
-    text = re.sub(r"[’'‘`]", '', text)             # remove apostrophes
+    text = re.sub(r'\([^)]*\)', '', text)  # remove (...)
+    text = re.sub(r"[’'‘`]", '', text)    # remove apostrophes
     text = re.sub(r'\b(inc|incorporated|ltd|llc|corp|co|company)\b', '', text)
-    text = re.sub(r'[^\w\s]', ' ', text)           # punctuation -> space
-    text = re.sub(r'\s+', ' ', text)               # collapse spaces
+    text = re.sub(r'[^\w\s]', ' ', text)   # punctuation → space
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-@st.cache_data(show_spinner=False)
-def read_excel(buf):
-    return pd.read_excel(buf)
+def clean_brand_name(brand):
+    brand = re.sub(r'\([^)]*\)', '', str(brand))
+    return clean_text(brand).strip()
 
-desc_df = None
-brand_df = None
+def brand_in_description(brand, description):
+    desc_clean = clean_text(description)
+    brand_clean = clean_text(brand)
+    return brand_clean in desc_clean  # phrase match
 
-if desc_file is not None:
-    try:
-        desc_df = read_excel(desc_file)
-        st.success(f"Descriptions file loaded — {desc_df.shape[0]} rows, {desc_df.shape[1]} columns")
-        with st.expander("Preview: Descriptions", expanded=False):
-            st.dataframe(desc_df.head(20), use_container_width=True)
-    except Exception as e:
-        st.error(f"Failed to read descriptions Excel: {e}")
+def split_brands(s):
+    pattern = r',\s*(?![^()]*\))'
+    return re.split(pattern, str(s))
 
-if brand_file is not None:
-    try:
-        brand_df = read_excel(brand_file)
-        st.success(f"Brands file loaded — {brand_df.shape[0]} rows, {brand_df.shape[1]} columns")
-        with st.expander("Preview: Brands", expanded=False):
-            st.dataframe(brand_df.head(20), use_container_width=True)
-    except Exception as e:
-        st.error(f"Failed to read brands Excel: {e}")
+def filter_matched_brands(description, matched_brands_str):
+    if pd.isna(matched_brands_str) or str(matched_brands_str).strip() == '':
+        return "no brand found"
 
-# --- Column mapping
-desc_text_col = None
-desc_id_col = None
-brand_text_col = None
+    matched_brands_raw = split_brands(matched_brands_str)
+    multi_word_brands = []
+    single_word_flag = False
 
-if desc_df is not None:
-    st.subheader("Map Description Columns")
-    cols = list(desc_df.columns)
-    # Try to guess sensible defaults
-    guess_desc = None
-    for c in cols:
-        if str(c).strip().lower() in ("description", "descriptions", "product_description", "text"):
-            guess_desc = c
-            break
-    desc_text_col = st.selectbox("Descriptions: text column", options=cols, index=(cols.index(guess_desc) if guess_desc in cols else 0), key="desc_text_col")
-    desc_id_col = st.selectbox("Descriptions: optional ID/key column", options=["(none)"] + cols, index=0, key="desc_id_col")
+    for raw_brand in matched_brands_raw:
+        brand = clean_brand_name(raw_brand)
+        brand_tokens = brand.split()
 
-if brand_df is not None:
-    st.subheader("Map Brand Columns")
-    bcols = list(brand_df.columns)
-    guess_brand = None
-    for c in bcols:
-        if str(c).strip().lower() in ("brand", "brands", "name", "manufacturer"):
-            guess_brand = c
-            break
-    brand_text_col = st.selectbox("Brands: brand/name column", options=bcols, index=(bcols.index(guess_brand) if guess_brand in bcols else 0), key="brand_text_col")
+        if len(brand_tokens) == 1:
+            single_word_flag = True
+            continue
 
-# --- Run
-run = st.button("▶️ Run Matching", type="primary", disabled=not (desc_df is not None and brand_df is not None))
+        if brand_in_description(brand, description):
+            multi_word_brands.append(raw_brand.strip())
+
+    if multi_word_brands:
+        return ', '.join(multi_word_brands)
+
+    if single_word_flag:
+        return "this is a single word brand"
+
+    return "no brand found"
+
+# Run button
+run = st.button("▶️ Run Matching", type="primary", disabled=not (desc_file and brand_file))
 
 if run:
-    if desc_text_col is None or brand_text_col is None:
-        st.error("Please choose the description text column and brand column.")
+    try:
+        desc_df = pd.read_excel(desc_file)
+        brand_df = pd.read_excel(brand_file)
+    except Exception as e:
+        st.error(f"Failed to read Excel files: {e}")
         st.stop()
 
-    # Prepare brands (drop NaNs)
-    work_brands = brand_df.dropna(subset=[brand_text_col]).copy()
-    cleaned_brands = [clean_text(b) for b in work_brands[brand_text_col].astype(str)]
-    cleaned_to_original = dict(zip(cleaned_brands, work_brands[brand_text_col].astype(str)))
+    # Ensure correct columns
+    if "Description" not in desc_df.columns:
+        st.error("Descriptions file must have a column named 'Description'.")
+        st.stop()
+    if "Brand" not in brand_df.columns:
+        st.error("Brands file must have a column named 'Brand'.")
+        st.stop()
+    if "data_key" not in desc_df.columns:
+        st.warning("No 'data_key' column found. Will continue without it.")
+
+    # Clean brand list
+    brand_df = brand_df.dropna(subset=["Brand"])
+    cleaned_brands = [clean_text(b) for b in brand_df["Brand"]]
+    cleaned_to_original = dict(zip(cleaned_brands, brand_df["Brand"]))
 
     matched_brands_per_description = []
-    scores_per_description = []
-
-    st.write("Starting matching process…")
     prog = st.progress(0)
     total = len(desc_df)
 
-    for i, desc in enumerate(desc_df[desc_text_col].astype(str)):
+    for i, desc in enumerate(desc_df["Description"].astype(str)):
         desc_lower = desc.lower()
 
-        # try " by " heuristic first
-        candidates_source = None
         if " by " in desc_lower:
             after_by = desc_lower.split(" by ", 1)[1]
             query = clean_text(after_by)
-            candidates_source = "after ' by '"
         else:
             query = clean_text(desc)
-            candidates_source = "full description"
 
         results = process.extract(
             query=query,
@@ -131,12 +124,10 @@ if run:
             scorer=fuzz.token_set_ratio,
             limit=int(top_n),
         )
+        filtered_matches = [cleaned_to_original[m[0]] for m in results if m[1] >= int(similarity_threshold)]
 
-        # filter by threshold
-        filtered = [(cleaned_to_original[m[0]], m[1]) for m in results if m[1] >= int(similarity_threshold)]
-
-        # fallback: if none after-by, use full desc
-        if len(filtered) == 0 and " by " in desc_lower:
+        # fallback if none matched after "by"
+        if not filtered_matches and " by " in desc_lower:
             query2 = clean_text(desc)
             results2 = process.extract(
                 query=query2,
@@ -144,113 +135,43 @@ if run:
                 scorer=fuzz.token_set_ratio,
                 limit=int(top_n),
             )
-            filtered = [(cleaned_to_original[m[0]], m[1]) for m in results2 if m[1] >= int(similarity_threshold)]
+            filtered_matches = [cleaned_to_original[m[0]] for m in results2 if m[1] >= int(similarity_threshold)]
 
-        matched_brands_per_description.append(", ".join([f"{name} ({score})" for name, score in filtered]))
-        scores_per_description.append([score for _, score in filtered])
+        matched_brands_per_description.append(", ".join(filtered_matches))
 
         if (i + 1) % max(1, total // 100) == 0:
             prog.progress(min(1.0, (i + 1) / total))
 
-    # Build output
-    out_df = pd.DataFrame({
-        "Description": desc_df[desc_text_col].astype(str),
-        "Matched_Brands": matched_brands_per_description,
-    })
+    # Add matches
+    desc_df["Matched_Brands"] = matched_brands_per_description
 
-    # put ID first if provided
-    if desc_id_col and desc_id_col != "(none)":
-        out_df.insert(0, "data_key", desc_df[desc_id_col])
+    # Filter matches (Stage 2)
+    desc_df["Filtered_Brands"] = desc_df.apply(
+        lambda row: filter_matched_brands(row["Description"], row["Matched_Brands"]),
+        axis=1
+    )
+
+    # Reorder columns
+    if "data_key" in desc_df.columns:
+        out_df = desc_df[["data_key", "Description", "Matched_Brands", "Filtered_Brands"]]
     else:
-        # still add placeholder to match your old format if needed
-        pass
+        out_df = desc_df[["Description", "Matched_Brands", "Filtered_Brands"]]
 
-    st.success("Matching complete!")
-    st.subheader("Results (first 200 rows)")
+    st.success("✅ Matching complete!")
+    st.subheader("Results Preview (first 200 rows)")
     st.dataframe(out_df.head(200), use_container_width=True)
 
-    # Download as Excel
+    # Download
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         out_df.to_excel(writer, index=False, sheet_name="matches")
-        # Optional: include inputs for traceability
-        desc_df.head(1000).to_excel(writer, index=False, sheet_name="descriptions_sample")
-        brand_df.head(1000).to_excel(writer, index=False, sheet_name="brands_sample")
     output.seek(0)
 
     st.download_button(
         label="⬇️ Download Excel results",
         data=output,
-        file_name="brand_match_results_top5_with_key.xlsx",
+        file_name="brand_match_results_filtered_with_key.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-# -------------------- Stage 2 Filtering --------------------
-st.subheader("Stage 2: Filter to brands already present in the description")
-
-import re as _re
-
-def _clean_text(text):
-    text = str(text).lower()
-    text = _re.sub(r'\([^)]*\)', '', text)             # remove (...) content
-    text = _re.sub(r"[’'‘`]", '', text)                # remove apostrophes
-    text = _re.sub(r'\b(inc|incorporated|ltd|llc|corp|co|company)\b', '', text)
-    text = _re.sub(r'[^\w\s]', ' ', text)              # punctuation -> space
-    text = _re.sub(r'\s+', ' ', text)                  # normalize spaces
-    return text.strip()
-
-def _clean_brand_name(brand):
-    brand = _re.sub(r'\([^)]*\)', '', str(brand))
-    return _clean_text(brand).strip()
-
-def _brand_in_description(brand, description):
-    description_tokens = set(_clean_text(description).split())
-    brand_tokens = set(str(brand).split())
-    return brand_tokens.issubset(description_tokens)
-
-def _split_brands(s):
-    # Split on commas NOT within parentheses
-    pattern = r',\s*(?![^()]*\))'
-    return _re.split(pattern, str(s))
-
-def _filter_matched_brands(description, matched_brands_str):
-    if pd.isna(matched_brands_str) or str(matched_brands_str).strip() == '':
-        return ''
-    matched_brands_raw = _split_brands(matched_brands_str)
-    filtered_brands = []
-    for raw_brand in matched_brands_raw:
-        brand = _clean_brand_name(raw_brand)
-        if _brand_in_description(brand, description):
-            filtered_brands.append(str(raw_brand).strip())
-    return ', '.join(filtered_brands)
-
-# Build Stage 2 DataFrame
-stage2_df = out_df.copy()
-if "Description" in stage2_df.columns and "Matched_Brands" in stage2_df.columns:
-    stage2_df["Filtered_Brands"] = stage2_df.apply(
-        lambda row: _filter_matched_brands(row["Description"], row["Matched_Brands"]),
-        axis=1
-    )
-else:
-    st.warning("Stage 2 could not run because required columns are missing.")
-    stage2_df = out_df
-
-st.subheader("Stage 2 Results (first 200 rows)")
-st.dataframe(stage2_df.head(200), use_container_width=True)
-
-# Download Stage 2 results
-output2 = io.BytesIO()
-with pd.ExcelWriter(output2, engine="openpyxl") as writer:
-    stage2_df.to_excel(writer, index=False, sheet_name="Sheet1")
-output2.seek(0)
-
-st.download_button(
-    label="⬇️ Download Excel results (Stage 2 filtered)",
-    data=output2,
-    file_name="brand_match_results_filtered_with_key.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
-
-
 st.caption("Tip: If you see missing matches, lower the threshold or increase Top N.")
-    
